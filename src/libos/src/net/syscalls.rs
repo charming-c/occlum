@@ -1,4 +1,4 @@
-use super::socket::{mmsghdr, MsgFlags, SocketFlags, SocketProtocol};
+use super::socket::{mmsghdr, IPProtocol, MsgFlags, NetlinkProtocol, SocketFlags, SocketProtocol};
 
 use atomic::Ordering;
 use core::f32::consts::E;
@@ -42,17 +42,37 @@ pub fn do_socket(domain: c_int, socket_type: c_int, protocol: c_int) -> Result<i
     let mut file_ref: Option<Arc<dyn File>> = None;
 
     // Only support INET and INET6 domain with uring feature
-    if ENABLE_URING.load(Ordering::Relaxed) && (domain == Domain::INET || domain == Domain::INET6) {
-        let protocol = SocketProtocol::try_from(protocol)
-            .map_err(|_| errno!(EINVAL, "Invalid or unsupported network protocol"))?;
+    if ENABLE_URING.load(Ordering::Relaxed)
+        && (domain == Domain::INET || domain == Domain::INET6 || domain == Domain::NETLINK)
+    {
+        let protocol = match domain {
+            Domain::NETLINK => {
+                let netlink_protocol = NetlinkProtocol::try_from(protocol)
+                    .map_err(|_| errno!(EINVAL, "Invalid or unsupported netlink protocol"))?;
+                SocketProtocol::NetlinkProtocol(netlink_protocol)
+            }
+            _ => {
+                let ip_protocol = IPProtocol::try_from(protocol)
+                    .map_err(|_| errno!(EINVAL, "Invalid or unsupported network protocol"))?;
+                SocketProtocol::IPProtocol(ip_protocol)
+            }
+        };
 
         // Determine if type and domain match uring supported socket
         let match_uring = move || {
-            let is_uring_type =
-                (socket_type == SocketType::DGRAM || socket_type == SocketType::STREAM);
-            let is_uring_protocol = (protocol == SocketProtocol::IPPROTO_IP
-                || protocol == SocketProtocol::IPPROTO_TCP
-                || protocol == SocketProtocol::IPPROTO_UDP);
+            let is_uring_type = (socket_type == SocketType::DGRAM
+                || socket_type == SocketType::STREAM
+                || socket_type == SocketType::RAW);
+            let is_uring_protocol = match protocol {
+                SocketProtocol::IPProtocol(ipprotocol) => {
+                    (ipprotocol == IPProtocol::IPPROTO_IP
+                        || ipprotocol == IPProtocol::IPPROTO_TCP
+                        || ipprotocol == IPProtocol::IPPROTO_UDP)
+                }
+                SocketProtocol::NetlinkProtocol(netlink_protocol) => {
+                    (netlink_protocol == NetlinkProtocol::NETLINK_ROUTE)
+                }
+            };
 
             is_uring_type && is_uring_protocol
         };

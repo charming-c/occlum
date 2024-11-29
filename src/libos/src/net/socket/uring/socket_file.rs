@@ -1,10 +1,11 @@
+use self::impls::NetlinkDatagram;
 use self::impls::{Ipv4Datagram, Ipv6Datagram};
 use crate::events::{Observer, Poller};
-use crate::net::socket::{MsgFlags, SocketProtocol};
+use crate::net::socket::{IPProtocol, MsgFlags, NetlinkProtocol, SocketProtocol};
 
 use self::impls::{Ipv4Stream, Ipv6Stream};
 use crate::fs::{AccessMode, IoEvents, IoNotifier, IoctlCmd, StatusFlags};
-use crate::net::socket::{AnyAddr, Ipv4SocketAddr, Ipv6SocketAddr};
+use crate::net::socket::{AnyAddr, Ipv4SocketAddr, Ipv6SocketAddr, NetlinkSocketAddr};
 use crate::prelude::*;
 
 #[derive(Debug)]
@@ -29,6 +30,9 @@ macro_rules! apply_fn_on_any_socket {
             AnySocket::Ipv6Datagram($socket) => {
                 $($fn_body)*
             }
+            AnySocket::NetlinkDatagram($socket) => {
+                $($fn_body)*
+            }
         }
     }}
 }
@@ -51,6 +55,7 @@ enum AnySocket {
     Ipv6Stream(Ipv6Stream),
     Ipv4Datagram(Ipv4Datagram),
     Ipv6Datagram(Ipv6Datagram),
+    NetlinkDatagram(NetlinkDatagram),
 }
 
 // Implement the common methods required by FileHandle
@@ -106,6 +111,7 @@ impl SocketFile {
         match self.socket {
             AnySocket::Ipv4Stream(_) | AnySocket::Ipv6Stream(_) => SocketType::STREAM,
             AnySocket::Ipv4Datagram(_) | AnySocket::Ipv6Datagram(_) => SocketType::DGRAM,
+            AnySocket::NetlinkDatagram(_) => SocketType::RAW,
         }
     }
 }
@@ -120,10 +126,20 @@ impl SocketFile {
     ) -> Result<Self> {
         match socket_type {
             SocketType::STREAM => {
-                if protocol != SocketProtocol::IPPROTO_IP && protocol != SocketProtocol::IPPROTO_TCP
-                {
-                    return_errno!(EPROTONOSUPPORT, "Protocol not supported");
-                }
+                let protocol = match protocol {
+                    SocketProtocol::IPProtocol(ipprotocol) => {
+                        if ipprotocol != IPProtocol::IPPROTO_IP
+                            && ipprotocol != IPProtocol::IPPROTO_TCP
+                        {
+                            return_errno!(EPROTONOSUPPORT, "Protocol not supported");
+                        } else {
+                            ipprotocol
+                        }
+                    }
+                    SocketProtocol::NetlinkProtocol(netlink_protocol) => {
+                        return_errno!(EPROTONOSUPPORT, "Protocol not supported");
+                    }
+                };
                 let any_socket = match domain {
                     Domain::INET => {
                         let ipv4_stream = Ipv4Stream::new(nonblocking)?;
@@ -141,10 +157,20 @@ impl SocketFile {
                 Ok(new_self)
             }
             SocketType::DGRAM => {
-                if protocol != SocketProtocol::IPPROTO_IP && protocol != SocketProtocol::IPPROTO_UDP
-                {
-                    return_errno!(EPROTONOSUPPORT, "Protocol not supported");
-                }
+                let protocol = match protocol {
+                    SocketProtocol::IPProtocol(ipprotocol) => {
+                        if ipprotocol != IPProtocol::IPPROTO_IP
+                            && ipprotocol != IPProtocol::IPPROTO_UDP
+                        {
+                            return_errno!(EPROTONOSUPPORT, "Protocol not supported");
+                        } else {
+                            ipprotocol
+                        }
+                    }
+                    SocketProtocol::NetlinkProtocol(netlink_protocol) => {
+                        return_errno!(EPROTONOSUPPORT, "Protocol not supported");
+                    }
+                };
                 let any_socket = match domain {
                     Domain::INET => {
                         let ipv4_datagram = Ipv4Datagram::new(nonblocking)?;
@@ -162,7 +188,30 @@ impl SocketFile {
                 Ok(new_self)
             }
             SocketType::RAW => {
-                return_errno!(EINVAL, "RAW socket not supported");
+                let protocol = match protocol {
+                    SocketProtocol::IPProtocol(ipprotocol) => {
+                        return_errno!(EPROTONOSUPPORT, "Protocol not supported");
+                    }
+                    SocketProtocol::NetlinkProtocol(netlink_protocol) => {
+                        if netlink_protocol != NetlinkProtocol::NETLINK_ROUTE {
+                            return_errno!(EPROTONOSUPPORT, "Protocol not supported");
+                        } else {
+                            netlink_protocol
+                        }
+                    }
+                };
+                let any_socket = match domain {
+                    Domain::NETLINK => {
+                        let netlink_datagram = NetlinkDatagram::new(nonblocking)?;
+                        debug!("new netlink socket!!!");
+                        AnySocket::NetlinkDatagram(netlink_datagram)
+                    }
+                    _ => {
+                        return_errno!(EINVAL, "not support yet");
+                    }
+                };
+                let new_self = Self { socket: any_socket };
+                Ok(new_self)
             }
             _ => {
                 return_errno!(ESOCKTNOSUPPORT, "socket type not supported");
@@ -204,6 +253,15 @@ impl SocketFile {
                 }
                 ipv6_datagram.connect(ip_addr)
             }
+
+            AnySocket::NetlinkDatagram(netlink_datagram) => {
+                let mut nl_addr = None;
+                if !addr.is_unspec() {
+                    let netlink_addr = addr.to_netlink()?;
+                    nl_addr = Some(netlink_addr);
+                }
+                netlink_datagram.connect(nl_addr)
+            }
             _ => {
                 return_errno!(EINVAL, "connect is not supported");
             }
@@ -228,6 +286,11 @@ impl SocketFile {
             AnySocket::Ipv6Datagram(ipv6_datagram) => {
                 let ip_addr = addr.to_ipv6()?;
                 ipv6_datagram.bind(ip_addr)
+            }
+
+            AnySocket::NetlinkDatagram(netlink_datagram) => {
+                let netlink_addr = addr.to_netlink()?;
+                netlink_datagram.bind(netlink_addr)
             }
 
             _ => {
@@ -317,6 +380,16 @@ impl SocketFile {
                     msg_controllen,
                 )
             }
+            AnySocket::NetlinkDatagram(netlink_datagram) => {
+                let (bytes_recv, addr_recv, msg_flags, msg_controllen) =
+                    netlink_datagram.recvmsg(bufs, flags, control)?;
+                (
+                    bytes_recv,
+                    addr_recv.map(|addr| AnyAddr::Netlink(addr)),
+                    msg_flags,
+                    msg_controllen,
+                )
+            }
             _ => {
                 return_errno!(EINVAL, "recvfrom is not supported");
             }
@@ -353,6 +426,14 @@ impl SocketFile {
                 };
                 ipv6_datagram.sendmsg(bufs, ip_addr, flags, control)
             }
+            AnySocket::NetlinkDatagram(netlink_datagram) => {
+                let netlink_addr = if let Some(addr) = addr.as_ref() {
+                    Some(addr.to_netlink()?)
+                } else {
+                    None
+                };
+                netlink_datagram.sendmsg(bufs, netlink_addr, flags, control)
+            }
             _ => {
                 return_errno!(EINVAL, "sendmsg is not supported");
             }
@@ -370,6 +451,9 @@ impl SocketFile {
             AnySocket::Ipv6Stream(ipv6_stream) => AnyAddr::Ipv6(ipv6_stream.addr()?),
             AnySocket::Ipv4Datagram(ipv4_datagram) => AnyAddr::Ipv4(ipv4_datagram.addr()?),
             AnySocket::Ipv6Datagram(ipv6_datagram) => AnyAddr::Ipv6(ipv6_datagram.addr()?),
+            AnySocket::NetlinkDatagram(netlink_datagram) => {
+                AnyAddr::Netlink(netlink_datagram.addr()?)
+            }
             _ => {
                 return_errno!(EINVAL, "addr is not supported");
             }
@@ -382,6 +466,9 @@ impl SocketFile {
             AnySocket::Ipv6Stream(ipv6_stream) => AnyAddr::Ipv6(ipv6_stream.peer_addr()?),
             AnySocket::Ipv4Datagram(ipv4_datagram) => AnyAddr::Ipv4(ipv4_datagram.peer_addr()?),
             AnySocket::Ipv6Datagram(ipv6_datagram) => AnyAddr::Ipv6(ipv6_datagram.peer_addr()?),
+            AnySocket::NetlinkDatagram(netlink_datagram) => {
+                AnyAddr::Netlink(netlink_datagram.peer_addr()?)
+            }
             _ => {
                 return_errno!(EINVAL, "peer_addr is not supported");
             }
@@ -394,6 +481,7 @@ impl SocketFile {
             AnySocket::Ipv6Stream(ipv6_stream) => ipv6_stream.shutdown(how),
             AnySocket::Ipv4Datagram(ipv4_datagram) => ipv4_datagram.shutdown(how),
             AnySocket::Ipv6Datagram(ipv6_datagram) => ipv6_datagram.shutdown(how),
+            AnySocket::NetlinkDatagram(netlink_datagram) => netlink_datagram.shutdown(how),
             _ => {
                 return_errno!(EINVAL, "shutdown is not supported");
             }
@@ -406,6 +494,7 @@ impl SocketFile {
             AnySocket::Ipv6Stream(ipv6_stream) => ipv6_stream.close(),
             AnySocket::Ipv4Datagram(ipv4_datagram) => ipv4_datagram.close(),
             AnySocket::Ipv6Datagram(ipv6_datagram) => ipv6_datagram.close(),
+            AnySocket::NetlinkDatagram(netlink_datagram) => netlink_datagram.close(),
             _ => Ok(()),
         }
     }
@@ -430,6 +519,9 @@ mod impls {
         crate::net::socket::uring::datagram::DatagramSocket<Ipv4SocketAddr, SocketRuntime>;
     pub type Ipv6Datagram =
         crate::net::socket::uring::datagram::DatagramSocket<Ipv6SocketAddr, SocketRuntime>;
+
+    pub type NetlinkDatagram =
+        crate::net::socket::uring::datagram::DatagramSocket<NetlinkSocketAddr, SocketRuntime>;
 
     pub struct SocketRuntime;
     impl crate::net::socket::uring::runtime::Runtime for SocketRuntime {

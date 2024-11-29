@@ -3,7 +3,10 @@ use std::mem::{self, MaybeUninit};
 use crate::net::socket::Domain;
 use crate::prelude::*;
 
-use super::{Addr, CSockAddr, Ipv4Addr, Ipv4SocketAddr, Ipv6SocketAddr, SockAddr, UnixAddr};
+use super::{
+    Addr, CSockAddr, Ipv4Addr, Ipv4SocketAddr, Ipv6SocketAddr, NetlinkSocketAddr, SockAddr,
+    UnixAddr,
+};
 use num_enum::IntoPrimitive;
 use std::path::Path;
 
@@ -11,6 +14,7 @@ use std::path::Path;
 pub enum AnyAddr {
     Ipv4(Ipv4SocketAddr),
     Ipv6(Ipv6SocketAddr),
+    Netlink(NetlinkSocketAddr),
     Unix(UnixAddr),
     Raw(SockAddr),
     Unspec,
@@ -26,6 +30,10 @@ impl AnyAddr {
             libc::AF_INET6 => {
                 let ipv6_addr = Ipv6SocketAddr::from_c_storage(c_addr, c_addr_len)?;
                 Self::Ipv6(ipv6_addr)
+            }
+            libc::AF_NETLINK => {
+                let nl_addr = NetlinkSocketAddr::from_c_storage(c_addr, c_addr_len)?;
+                Self::Netlink(nl_addr)
             }
             libc::AF_UNSPEC => Self::Unspec,
             libc::AF_UNIX | libc::AF_LOCAL => {
@@ -44,6 +52,7 @@ impl AnyAddr {
         match self {
             Self::Ipv4(ipv4_addr) => ipv4_addr.to_c_storage(),
             Self::Ipv6(ipv6_addr) => ipv6_addr.to_c_storage(),
+            Self::Netlink(nl_addr) => nl_addr.to_c_storage(),
             Self::Unix(unix_addr) => unix_addr.to_c_storage(),
             Self::Raw(raw_addr) => raw_addr.to_c_storage(),
             Self::Unspec => {
@@ -59,6 +68,7 @@ impl AnyAddr {
         match self {
             Self::Ipv4(ipv4_addr) => ipv4_addr.to_raw(),
             Self::Ipv6(ipv6_addr) => ipv6_addr.to_raw(),
+            Self::Netlink(nl_addr) => nl_addr.to_raw(),
             Self::Unix(unix_addr) => unix_addr.to_raw(),
             Self::Raw(raw_addr) => *raw_addr,
             Self::Unspec => {
@@ -88,6 +98,13 @@ impl AnyAddr {
         match self {
             Self::Ipv6(ipv6_addr) => Ok(ipv6_addr),
             _ => return_errno!(EAFNOSUPPORT, "not ipv6 address"),
+        }
+    }
+
+    pub fn to_netlink(&self) -> Result<&NetlinkSocketAddr> {
+        match self {
+            Self::Netlink(nl_addr) => Ok(nl_addr),
+            _ => return_errno!(EAFNOSUPPORT, "not netlink address"),
         }
     }
 
