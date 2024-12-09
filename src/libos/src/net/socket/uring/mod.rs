@@ -5,6 +5,7 @@
 pub mod common;
 pub mod datagram;
 pub mod file_impl;
+pub mod raw;
 pub mod runtime;
 pub mod socket_file;
 pub mod stream;

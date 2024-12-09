@@ -9,6 +9,15 @@ pub enum SocketProtocol {
     NetlinkProtocol(NetlinkProtocol),
 }
 
+impl SocketProtocol {
+    pub fn to_i32(self) -> Option<i32> {
+        match self {
+            SocketProtocol::IPProtocol(ip) => Some(ip.into()),
+            SocketProtocol::NetlinkProtocol(netlink) => Some(netlink.into()),
+        }
+    }
+}
+
 #[allow(non_camel_case_types)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
 #[repr(i32)]
