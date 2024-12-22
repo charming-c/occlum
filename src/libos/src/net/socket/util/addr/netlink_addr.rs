@@ -53,7 +53,7 @@ impl NetlinkSocketAddr {
     // since netlink is used for communicating with kernel, address's byte order is native
     pub fn from_c(c_addr: &libc::sockaddr_nl) -> Result<Self> {
         if c_addr.nl_family != libc::AF_NETLINK as libc::sa_family_t {
-            return_errno!(EINVAL, "an netlink address is expected");
+            return_errno!(EINVAL, "a netlink address is expected");
         }
         Ok(Self {
             pid: c_addr.nl_pid,

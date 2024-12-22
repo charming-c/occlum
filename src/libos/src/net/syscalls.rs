@@ -1,8 +1,9 @@
-use super::socket::{mmsghdr, IPProtocol, MsgFlags, NetlinkProtocol, SocketFlags, SocketProtocol};
+use super::socket::{mmsghdr, IPProtocol, MsgFlags, NetlinkFamily, SocketFlags, SocketProtocol};
 
 use atomic::Ordering;
 use core::f32::consts::E;
 use num_enum::TryFromPrimitive;
+use socket::EthernetProtocol;
 use std::mem::MaybeUninit;
 use std::ptr;
 use std::time::Duration;
@@ -41,15 +42,25 @@ pub fn do_socket(domain: c_int, socket_type: c_int, protocol: c_int) -> Result<i
 
     let mut file_ref: Option<Arc<dyn File>> = None;
 
-    // Only support INET and INET6 domain with uring feature
+    // Only support INET and INET6 and NETLINK domain with uring feature
     if ENABLE_URING.load(Ordering::Relaxed)
-        && (domain == Domain::INET || domain == Domain::INET6 || domain == Domain::NETLINK)
+        && (domain == Domain::INET
+            || domain == Domain::INET6
+            || domain == Domain::NETLINK
+            || domain == Domain::PACKET)
     {
         let protocol = match domain {
             Domain::NETLINK => {
-                let netlink_protocol = NetlinkProtocol::try_from(protocol)
-                    .map_err(|_| errno!(EINVAL, "Invalid or unsupported netlink protocol"))?;
-                SocketProtocol::NetlinkProtocol(netlink_protocol)
+                let netlink_family: NetlinkFamily = NetlinkFamily::try_from(protocol)
+                    .map_err(|_| errno!(EINVAL, "Invalid or unsupported netlink family"))?;
+                SocketProtocol::NetlinkFamily(netlink_family)
+            }
+            Domain::PACKET => {
+                // packet socket protocol use big endian as u16
+                let protocol = u16::from_be(protocol as u16);
+                let ethernet_protocol = EthernetProtocol::try_from(protocol as i32)
+                    .map_err(|_| errno!(EINVAL, "Invalid or unsupported ethernet protocol"))?;
+                SocketProtocol::EthernetProtocol(ethernet_protocol)
             }
             _ => {
                 let ip_protocol = IPProtocol::try_from(protocol)
@@ -67,11 +78,10 @@ pub fn do_socket(domain: c_int, socket_type: c_int, protocol: c_int) -> Result<i
                 SocketProtocol::IPProtocol(ipprotocol) => {
                     (ipprotocol == IPProtocol::IPPROTO_IP
                         || ipprotocol == IPProtocol::IPPROTO_TCP
-                        || ipprotocol == IPProtocol::IPPROTO_UDP)
+                        || ipprotocol == IPProtocol::IPPROTO_UDP
+                        || ipprotocol == IPProtocol::IPPROTO_RAW)
                 }
-                SocketProtocol::NetlinkProtocol(netlink_protocol) => {
-                    (netlink_protocol == NetlinkProtocol::NETLINK_ROUTE)
-                }
+                SocketProtocol::NetlinkFamily(_) | SocketProtocol::EthernetProtocol(_) => (true),
             };
 
             is_uring_type && is_uring_protocol

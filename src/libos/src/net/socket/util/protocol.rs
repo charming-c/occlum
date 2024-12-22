@@ -6,14 +6,16 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 #[repr(i32)]
 pub enum SocketProtocol {
     IPProtocol(IPProtocol),
-    NetlinkProtocol(NetlinkProtocol),
+    NetlinkFamily(NetlinkFamily),
+    EthernetProtocol(EthernetProtocol),
 }
 
 impl SocketProtocol {
     pub fn to_i32(self) -> Option<i32> {
         match self {
             SocketProtocol::IPProtocol(ip) => Some(ip.into()),
-            SocketProtocol::NetlinkProtocol(netlink) => Some(netlink.into()),
+            SocketProtocol::NetlinkFamily(netlink) => Some(netlink.into()),
+            SocketProtocol::EthernetProtocol(ethernet) => Some(ethernet.into()),
         }
     }
 }
@@ -53,7 +55,7 @@ pub enum IPProtocol {
 #[allow(non_camel_case_types)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
 #[repr(i32)]
-pub enum NetlinkProtocol {
+pub enum NetlinkFamily {
     NETLINK_ROUTE = 0,     /* Routing/device hook.  */
     NETLINK_USERSOCK = 2,  /* Reserved for user mode socket protocols.  */
     NETLINK_FIREWALL = 3,  /* Unused number, formerly ip_queue.  */
@@ -73,4 +75,15 @@ pub enum NetlinkProtocol {
     NETLINK_SCSITRANSPORT = 18, /* SCSI Transports.  */
     NETLINK_ECRYPTFS = 19,
     NETLINK_CRYPTO = 21, /* Crypto layer.  */
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
+#[repr(i32)]
+pub enum EthernetProtocol {
+    ETH_P_IP = 0x0800,   /* Internet Protocol packet.  */
+    ETH_P_ARP = 0x0806,  /* Address Resolution packet.  */
+    ETH_P_IPV6 = 0x86DD, /* IPv6 over bluebook.  */
+    ETH_P_ALL = 0x0003,  /* Every packet (be careful!!!).  */
+    ETH_P_PUP = 0x0200,  /* Xerox PUP packet.  */
 }

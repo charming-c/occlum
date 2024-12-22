@@ -4,8 +4,8 @@ use crate::net::socket::Domain;
 use crate::prelude::*;
 
 use super::{
-    Addr, CSockAddr, Ipv4Addr, Ipv4SocketAddr, Ipv6SocketAddr, NetlinkSocketAddr, SockAddr,
-    UnixAddr,
+    Addr, CSockAddr, Ipv4Addr, Ipv4SocketAddr, Ipv6SocketAddr, LinkLayerSocketAddr,
+    NetlinkSocketAddr, SockAddr, UnixAddr,
 };
 use num_enum::IntoPrimitive;
 use std::path::Path;
@@ -15,6 +15,7 @@ pub enum AnyAddr {
     Ipv4(Ipv4SocketAddr),
     Ipv6(Ipv6SocketAddr),
     Netlink(NetlinkSocketAddr),
+    LinkLayer(LinkLayerSocketAddr),
     Unix(UnixAddr),
     Raw(SockAddr),
     Unspec,
@@ -35,6 +36,10 @@ impl AnyAddr {
                 let nl_addr = NetlinkSocketAddr::from_c_storage(c_addr, c_addr_len)?;
                 Self::Netlink(nl_addr)
             }
+            libc::AF_PACKET => {
+                let ll_addr = LinkLayerSocketAddr::from_c_storage(c_addr, c_addr_len)?;
+                Self::LinkLayer(ll_addr)
+            }
             libc::AF_UNSPEC => Self::Unspec,
             libc::AF_UNIX | libc::AF_LOCAL => {
                 let unix_addr = UnixAddr::from_c_storage(c_addr, c_addr_len)?;
@@ -53,6 +58,7 @@ impl AnyAddr {
             Self::Ipv4(ipv4_addr) => ipv4_addr.to_c_storage(),
             Self::Ipv6(ipv6_addr) => ipv6_addr.to_c_storage(),
             Self::Netlink(nl_addr) => nl_addr.to_c_storage(),
+            Self::LinkLayer(ll_addr) => ll_addr.to_c_storage(),
             Self::Unix(unix_addr) => unix_addr.to_c_storage(),
             Self::Raw(raw_addr) => raw_addr.to_c_storage(),
             Self::Unspec => {
@@ -69,6 +75,7 @@ impl AnyAddr {
             Self::Ipv4(ipv4_addr) => ipv4_addr.to_raw(),
             Self::Ipv6(ipv6_addr) => ipv6_addr.to_raw(),
             Self::Netlink(nl_addr) => nl_addr.to_raw(),
+            Self::LinkLayer(ll_addr) => ll_addr.to_raw(),
             Self::Unix(unix_addr) => unix_addr.to_raw(),
             Self::Raw(raw_addr) => *raw_addr,
             Self::Unspec => {
@@ -105,6 +112,13 @@ impl AnyAddr {
         match self {
             Self::Netlink(nl_addr) => Ok(nl_addr),
             _ => return_errno!(EAFNOSUPPORT, "not netlink address"),
+        }
+    }
+
+    pub fn to_linklayer(&self) -> Result<&LinkLayerSocketAddr> {
+        match self {
+            Self::LinkLayer(ll_addr) => Ok(ll_addr),
+            _ => return_errno!(EAFNOSUPPORT, "not linklayer address"),
         }
     }
 
